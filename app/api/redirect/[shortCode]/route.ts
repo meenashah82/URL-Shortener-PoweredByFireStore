@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { doc, getDoc, increment, arrayUnion, serverTimestamp, runTransaction } from "firebase/firestore"
+import { doc, getDoc, runTransaction, serverTimestamp, increment, arrayUnion } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
 interface UrlData {
@@ -15,30 +15,28 @@ export async function GET(request: NextRequest, { params }: { params: { shortCod
   const { shortCode } = params
 
   try {
-    console.log(`=== API REDIRECT REQUEST ===`)
-    console.log(`1. Looking up short code: ${shortCode}`)
+    console.log(`🔗 Processing redirect for: ${shortCode}`)
 
     // Get URL data from Firestore
     const urlRef = doc(db, "urls", shortCode)
     const urlSnap = await getDoc(urlRef)
 
     if (!urlSnap.exists()) {
-      console.log(`2. No data found for short code: ${shortCode}`)
+      console.log(`❌ Short code not found: ${shortCode}`)
       return NextResponse.json({ error: "Short code not found" }, { status: 404 })
     }
 
     const urlData = urlSnap.data() as UrlData
-    console.log(`2. Firestore response for ${shortCode}:`, urlData)
 
     // Check if URL has expired or is inactive
     if (!urlData.isActive || (urlData.expiresAt && urlData.expiresAt.toDate() < new Date())) {
-      console.log(`3. URL expired or inactive for ${shortCode}`)
+      console.log(`❌ URL expired or inactive: ${shortCode}`)
       return NextResponse.json({ error: "Short code expired" }, { status: 404 })
     }
 
     // Validate that we have the required data
     if (!urlData.originalUrl) {
-      console.error("No originalUrl found in data:", urlData)
+      console.error("❌ No originalUrl found in data:", urlData)
       return NextResponse.json({ error: "Invalid URL data" }, { status: 500 })
     }
 
@@ -48,7 +46,7 @@ export async function GET(request: NextRequest, { params }: { params: { shortCod
       redirectUrl = "https://" + redirectUrl
     }
 
-    console.log(`3. Final redirect URL: ${redirectUrl}`)
+    console.log(`✅ Redirect URL: ${redirectUrl}`)
 
     // Get headers for analytics
     const userAgent = request.headers.get("user-agent") || ""
@@ -56,31 +54,29 @@ export async function GET(request: NextRequest, { params }: { params: { shortCod
     const forwardedFor = request.headers.get("x-forwarded-for") || ""
     const ip = forwardedFor.split(",")[0]?.trim() || ""
 
-    // Record the click using transaction for immediate consistency
-    console.log(`4. Recording click analytics with transaction...`)
-    await recordClickWithTransaction(shortCode, userAgent, referer, ip)
+    // Record the click with immediate Firestore update
+    console.log(`📊 Recording click analytics...`)
+    await recordClickImmediately(shortCode, userAgent, referer, ip)
 
-    console.log(`5. Returning redirect URL: ${redirectUrl}`)
-    console.log(`=== API REDIRECT COMPLETE ===`)
+    console.log(`🚀 Redirect complete for: ${shortCode}`)
 
     // Return the redirect URL for client-side redirection
     return NextResponse.json({ redirectUrl })
   } catch (error) {
-    console.error("=== API REDIRECT ERROR ===", error)
+    console.error("❌ Redirect error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
 
-async function recordClickWithTransaction(shortCode: string, userAgent: string, referer: string, ip: string) {
+async function recordClickImmediately(shortCode: string, userAgent: string, referer: string, ip: string) {
   try {
-    console.log(`Recording analytics with transaction for ${shortCode}`)
-
     const urlRef = doc(db, "urls", shortCode)
     const analyticsRef = doc(db, "analytics", shortCode)
 
-    // Use transaction to ensure atomic updates and immediate consistency
+    // Use transaction for immediate, atomic updates
     await runTransaction(db, async (transaction) => {
-      // Read current data
+      console.log(`🔄 Starting transaction for ${shortCode}`)
+
       const urlDoc = await transaction.get(urlRef)
       const analyticsDoc = await transaction.get(analyticsRef)
 
@@ -89,16 +85,19 @@ async function recordClickWithTransaction(shortCode: string, userAgent: string, 
       }
 
       const clickEvent = {
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         timestamp: serverTimestamp(),
         userAgent: userAgent.substring(0, 200),
         referer: referer.substring(0, 200),
         ip: ip.substring(0, 15),
-        id: Date.now().toString(), // Add unique ID for better tracking
+        sessionId: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        clickSource: "direct" as const,
+        realTime: true,
       }
 
-      console.log(`Transaction: Adding click event`, clickEvent)
+      console.log(`📝 Adding click event:`, clickEvent)
 
-      // Update URL clicks count
+      // Update URL document
       transaction.update(urlRef, {
         clicks: increment(1),
         lastClickAt: serverTimestamp(),
@@ -112,7 +111,6 @@ async function recordClickWithTransaction(shortCode: string, userAgent: string, 
           clickEvents: arrayUnion(clickEvent),
         })
       } else {
-        // Create analytics document if it doesn't exist
         transaction.set(analyticsRef, {
           shortCode,
           totalClicks: 1,
@@ -121,11 +119,13 @@ async function recordClickWithTransaction(shortCode: string, userAgent: string, 
           clickEvents: [clickEvent],
         })
       }
+
+      console.log(`✅ Transaction completed for ${shortCode}`)
     })
 
-    console.log(`Transaction completed successfully for ${shortCode}`)
+    console.log(`🎉 Click recorded successfully for ${shortCode}`)
   } catch (error) {
-    console.error("Error in transaction:", error)
-    // Don't throw error - we don't want to break the redirect
+    console.error("❌ Error recording click:", error)
+    // Don't throw - we don't want to break the redirect
   }
 }

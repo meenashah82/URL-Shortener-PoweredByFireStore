@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, ExternalLink, Calendar, MousePointer, Globe, Loader2, Activity, RefreshCw } from "lucide-react"
+import { ArrowLeft, ExternalLink, Calendar, MousePointer, Globe, Loader2, Activity, RefreshCw, Zap } from "lucide-react"
 import Link from "next/link"
 import { subscribeToAnalytics, getUrlData, type AnalyticsData, type UrlData } from "@/lib/analytics"
 
@@ -19,6 +19,9 @@ export default function AnalyticsPage({
   const [error, setError] = useState<string | null>(null)
   const [isRealTime, setIsRealTime] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [clickCount, setClickCount] = useState(0)
+  const [isNewClick, setIsNewClick] = useState(false)
+  const previousClickCount = useRef(0)
 
   const refreshData = async () => {
     try {
@@ -40,6 +43,8 @@ export default function AnalyticsPage({
           return
         }
         setUrlData(urlResult)
+        setClickCount(urlResult.clicks || 0)
+        previousClickCount.current = urlResult.clicks || 0
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred")
       } finally {
@@ -49,16 +54,37 @@ export default function AnalyticsPage({
 
     fetchInitialData()
 
-    // Set up real-time listener for analytics
+    // Set up real-time listener for analytics with immediate updates
     const unsubscribe = subscribeToAnalytics(shortCode, (data) => {
-      console.log("Analytics data updated:", data)
-      setAnalyticsData(data)
-      setIsRealTime(true)
-      setLastUpdate(new Date())
+      console.log("Real-time analytics update:", data)
+
+      if (data) {
+        setAnalyticsData(data)
+        setIsRealTime(true)
+        setLastUpdate(new Date())
+
+        // Update click count and trigger animation for new clicks
+        const newClickCount = data.totalClicks || 0
+        if (newClickCount > previousClickCount.current) {
+          setIsNewClick(true)
+          setClickCount(newClickCount)
+          previousClickCount.current = newClickCount
+
+          // Remove animation after 2 seconds
+          setTimeout(() => setIsNewClick(false), 2000)
+        }
+      }
     })
 
     return () => unsubscribe()
   }, [shortCode])
+
+  // Auto-refresh URL data when analytics update
+  useEffect(() => {
+    if (analyticsData && analyticsData.totalClicks > (urlData?.clicks || 0)) {
+      refreshData()
+    }
+  }, [analyticsData]) // Updated to use analyticsData directly
 
   if (loading) {
     return (
@@ -140,15 +166,43 @@ export default function AnalyticsPage({
               Refresh
             </Button>
             {isRealTime && (
-              <div className="flex items-center gap-1 text-green-600 text-sm">
-                <Activity className="h-4 w-4" />
-                Real-time
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 text-green-600 text-sm">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <Activity className="h-4 w-4" />
+                  Live
+                </div>
                 {lastUpdate && (
-                  <span className="text-xs text-gray-500 ml-2">Updated: {lastUpdate.toLocaleTimeString()}</span>
+                  <span className="text-xs text-gray-500">Updated: {lastUpdate.toLocaleTimeString()}</span>
                 )}
               </div>
             )}
           </div>
+
+          {/* Real-time Click Counter */}
+          <Card className="mb-8 border-2 border-blue-200">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className={`h-5 w-5 ${isNewClick ? "text-yellow-500 animate-bounce" : "text-blue-600"}`} />
+                Real-Time Click Counter
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-center">
+                <div
+                  className={`text-6xl font-bold transition-all duration-500 ${
+                    isNewClick ? "text-green-600 scale-110" : "text-blue-600"
+                  }`}
+                >
+                  {clickCount}
+                </div>
+                <p className="text-gray-600 mt-2">Total Clicks</p>
+                {isNewClick && (
+                  <div className="mt-2 text-green-600 font-medium animate-pulse">🎉 New click detected!</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
           {/* URL Info */}
           <Card className="mb-8">
@@ -186,23 +240,34 @@ export default function AnalyticsPage({
           </Card>
 
           <div className="grid md:grid-cols-2 gap-6">
-            {/* Recent Clicks */}
+            {/* Recent Clicks - Real-time updates */}
             <Card>
               <CardHeader>
-                <CardTitle>Recent Clicks</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  Recent Clicks
+                  {isRealTime && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 {recentClicks.length === 0 ? (
                   <div className="text-center py-8">
                     <p className="text-gray-500 text-sm mb-2">No clicks yet</p>
-                    <p className="text-xs text-gray-400">Share your short URL to see analytics here</p>
+                    <p className="text-xs text-gray-400">Share your short URL to see real-time analytics here</p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
                     {recentClicks.map((click, index) => (
-                      <div key={index} className="p-3 bg-gray-50 rounded-lg">
+                      <div
+                        key={click.id || index}
+                        className={`p-3 rounded-lg transition-all duration-500 ${
+                          index === 0 && isNewClick
+                            ? "bg-green-100 border-2 border-green-300 animate-pulse"
+                            : "bg-gray-50"
+                        }`}
+                      >
                         <div className="text-sm font-medium">
-                          {click.timestamp?.toDate?.()?.toLocaleString() || "Unknown time"}
+                          {click.timestamp?.toDate?.()?.toLocaleString() || "Just now"}
+                          {index === 0 && isNewClick && <span className="ml-2 text-green-600 text-xs">NEW!</span>}
                         </div>
                         {click.referer && (
                           <div className="text-xs text-gray-600 mt-1">
@@ -273,20 +338,6 @@ export default function AnalyticsPage({
                       </div>
                     ))}
                 </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Debug Info */}
-          {process.env.NODE_ENV === "development" && (
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle>Debug Info</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <pre className="text-xs bg-gray-100 p-2 rounded overflow-auto">
-                  {JSON.stringify({ analyticsData, urlData }, null, 2)}
-                </pre>
               </CardContent>
             </Card>
           )}

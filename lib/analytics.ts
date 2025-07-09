@@ -20,6 +20,7 @@ export interface ClickEvent {
   ip?: string
   country?: string
   city?: string
+  id?: string // Add unique ID for better tracking
 }
 
 export interface UrlData {
@@ -29,6 +30,7 @@ export interface UrlData {
   clicks: number
   isActive: boolean
   expiresAt: any // Firestore timestamp
+  lastClickAt?: any // Add last click timestamp
 }
 
 export interface AnalyticsData {
@@ -115,15 +117,26 @@ export async function getAnalyticsData(shortCode: string): Promise<AnalyticsData
   }
 }
 
-// Real-time listener for analytics data
+// Enhanced real-time listener for analytics data with immediate updates
 export function subscribeToAnalytics(shortCode: string, callback: (data: AnalyticsData | null) => void): () => void {
   const analyticsRef = doc(db, "analytics", shortCode)
 
   return onSnapshot(
     analyticsRef,
+    {
+      includeMetadataChanges: true, // Include pending writes for immediate updates
+    },
     (doc) => {
       if (doc.exists()) {
-        callback(doc.data() as AnalyticsData)
+        const data = doc.data() as AnalyticsData
+        console.log("Analytics snapshot received:", {
+          shortCode,
+          totalClicks: data.totalClicks,
+          clickEventsCount: data.clickEvents?.length || 0,
+          fromCache: doc.metadata.fromCache,
+          hasPendingWrites: doc.metadata.hasPendingWrites,
+        })
+        callback(data)
       } else {
         callback(null)
       }
@@ -150,6 +163,9 @@ export function subscribeToRecentClicks(
 
   return onSnapshot(
     analyticsQuery,
+    {
+      includeMetadataChanges: true, // Include pending writes for immediate updates
+    },
     (snapshot) => {
       const recentClicks: Array<ClickEvent & { shortCode: string }> = []
 
@@ -200,6 +216,9 @@ export function subscribeToTopUrls(
 
   return onSnapshot(
     urlsQuery,
+    {
+      includeMetadataChanges: true, // Include pending writes for immediate updates
+    },
     (snapshot) => {
       const topUrls = snapshot.docs.map((doc) => {
         const data = doc.data() as UrlData

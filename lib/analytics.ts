@@ -117,32 +117,67 @@ export async function getAnalyticsData(shortCode: string): Promise<AnalyticsData
   }
 }
 
-// Enhanced real-time listener for analytics data with immediate updates
+// Enhanced real-time listener for analytics data with automatic browser updates
 export function subscribeToAnalytics(shortCode: string, callback: (data: AnalyticsData | null) => void): () => void {
   const analyticsRef = doc(db, "analytics", shortCode)
+
+  console.log(`🔄 Starting real-time analytics subscription for: ${shortCode}`)
 
   return onSnapshot(
     analyticsRef,
     {
-      includeMetadataChanges: true, // Include pending writes for immediate updates
+      includeMetadataChanges: true, // Include pending writes for instant updates
     },
     (doc) => {
+      const timestamp = new Date().toISOString()
+
       if (doc.exists()) {
         const data = doc.data() as AnalyticsData
-        console.log("Analytics snapshot received:", {
+
+        console.log("📡 Analytics update received:", {
           shortCode,
           totalClicks: data.totalClicks,
           clickEventsCount: data.clickEvents?.length || 0,
           fromCache: doc.metadata.fromCache,
           hasPendingWrites: doc.metadata.hasPendingWrites,
+          source: doc.metadata.fromCache ? "local-cache" : "server",
+          timestamp,
         })
+
+        // Always trigger callback for any change, including local changes
         callback(data)
+
+        // If this is a pending write, set up a follow-up listener for server confirmation
+        if (doc.metadata.hasPendingWrites) {
+          console.log("⏳ Pending write detected, waiting for server confirmation...")
+
+          // Set up a one-time listener for server confirmation
+          const serverConfirmListener = onSnapshot(
+            analyticsRef,
+            { includeMetadataChanges: false }, // Only server updates
+            (serverDoc) => {
+              if (serverDoc.exists() && !serverDoc.metadata.hasPendingWrites) {
+                console.log("✅ Server confirmation received")
+                callback(serverDoc.data() as AnalyticsData)
+                serverConfirmListener() // Unsubscribe after confirmation
+              }
+            },
+          )
+        }
       } else {
+        console.log(`❌ No analytics document found for: ${shortCode}`)
         callback(null)
       }
     },
     (error) => {
-      console.error("Error in analytics subscription:", error)
+      console.error("❌ Real-time analytics subscription error:", error)
+
+      // Implement retry logic
+      setTimeout(() => {
+        console.log("🔄 Retrying analytics subscription...")
+        subscribeToAnalytics(shortCode, callback)
+      }, 2000)
+
       callback(null)
     },
   )

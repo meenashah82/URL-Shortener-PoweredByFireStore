@@ -85,11 +85,15 @@ export class RealTimeClickTracker {
     }
   }
 
-  // Set up real-time listener for immediate UI updates
+  // Enhanced real-time listener for immediate UI updates without refresh
   subscribeToRealTimeUpdates(callback: (data: any) => void): () => void {
     const analyticsRef = doc(db, "analytics", this.shortCode)
+    const urlRef = doc(db, "urls", this.shortCode)
 
-    const unsubscribe = onSnapshot(
+    console.log(`🔗 Setting up real-time subscription for: ${this.shortCode}`)
+
+    // Subscribe to analytics with metadata changes for instant updates
+    const unsubscribeAnalytics = onSnapshot(
       analyticsRef,
       {
         includeMetadataChanges: true, // Critical for immediate updates
@@ -97,22 +101,77 @@ export class RealTimeClickTracker {
       (doc) => {
         if (doc.exists()) {
           const data = doc.data()
-          console.log("📡 Real-time update received:", {
+          console.log("📊 Analytics snapshot received:", {
+            shortCode: this.shortCode,
             totalClicks: data.totalClicks,
+            clickEventsCount: data.clickEvents?.length || 0,
             fromCache: doc.metadata.fromCache,
             hasPendingWrites: doc.metadata.hasPendingWrites,
             source: doc.metadata.fromCache ? "cache" : "server",
+            timestamp: new Date().toISOString(),
           })
+
+          // Always call callback for any change, including pending writes
           callback(data)
         }
       },
       (error) => {
-        console.error("❌ Real-time listener error:", error)
+        console.error("❌ Analytics listener error:", error)
+        // Retry connection after error
+        setTimeout(() => {
+          console.log("🔄 Retrying analytics connection...")
+          this.subscribeToRealTimeUpdates(callback)
+        }, 2000)
       },
     )
 
-    this.listeners.push(unsubscribe)
-    return unsubscribe
+    // Also subscribe to URL changes for comprehensive updates
+    const unsubscribeUrl = onSnapshot(
+      urlRef,
+      {
+        includeMetadataChanges: true,
+      },
+      (doc) => {
+        if (doc.exists()) {
+          const urlData = doc.data()
+          console.log("🔗 URL snapshot received:", {
+            shortCode: this.shortCode,
+            clicks: urlData.clicks,
+            fromCache: doc.metadata.fromCache,
+            hasPendingWrites: doc.metadata.hasPendingWrites,
+          })
+
+          // Trigger analytics refresh when URL data changes
+          if (!doc.metadata.fromCache || doc.metadata.hasPendingWrites) {
+            // Small delay to ensure analytics is updated after URL
+            setTimeout(() => {
+              const analyticsDoc = doc(db, "analytics", this.shortCode)
+              onSnapshot(
+                analyticsDoc,
+                (analyticsSnap) => {
+                  if (analyticsSnap.exists()) {
+                    callback(analyticsSnap.data())
+                  }
+                },
+                { includeMetadataChanges: true },
+              )
+            }, 100)
+          }
+        }
+      },
+      (error) => {
+        console.error("❌ URL listener error:", error)
+      },
+    )
+
+    const cleanup = () => {
+      console.log(`🧹 Cleaning up listeners for: ${this.shortCode}`)
+      unsubscribeAnalytics()
+      unsubscribeUrl()
+    }
+
+    this.listeners.push(cleanup)
+    return cleanup
   }
 
   // Clean up listeners

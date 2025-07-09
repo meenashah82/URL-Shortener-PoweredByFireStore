@@ -5,7 +5,7 @@ import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, ExternalLink, Calendar, MousePointer, Globe, Loader2, RefreshCw, Zap, Target } from "lucide-react"
+import { ArrowLeft, ExternalLink, Calendar, Globe, Loader2, Zap, Target } from "lucide-react"
 import Link from "next/link"
 import { getUrlData, type UrlData } from "@/lib/analytics"
 import { RealTimeClickTracker } from "@/lib/real-time-tracker"
@@ -45,13 +45,15 @@ export default function AnalyticsPage({
     }
   }, [shortCode])
 
-  // Track clicks on analytics page elements
+  // Track clicks on analytics page elements (for interaction tracking only - does NOT increment click count)
   const trackAnalyticsClick = async (element: string, coordinates?: { x: number; y: number }) => {
     if (trackerRef.current) {
+      // This tracks analytics page interactions but does NOT increment the URL click count
       await trackerRef.current.trackClick("analytics_page", {
         element,
         coordinates,
         timestamp: new Date().toISOString(),
+        note: "Analytics page interaction - not a URL click",
       })
     }
   }
@@ -268,17 +270,7 @@ export default function AnalyticsPage({
                 </Button>
               </Link>
               <h1 className="text-2xl font-bold text-gray-900">Auto-Updating Analytics Dashboard</h1>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={(e) => {
-                  handleElementClick("refresh-button")(e)
-                  refreshData()
-                }}
-              >
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Manual Refresh
-              </Button>
+              {/* Remove the Manual Refresh button completely */}
             </div>
 
             {/* Rest of the existing content remains the same */}
@@ -295,11 +287,11 @@ export default function AnalyticsPage({
                       isNewClick ? "text-yellow-500 animate-bounce scale-125" : "text-blue-600"
                     }`}
                   />
-                  Auto-Updating Click Counter
+                  Total Clicks
                   {isNewClick && (
                     <div className="flex items-center gap-1 text-green-600 animate-pulse">
                       <Target className="h-4 w-4" />
-                      <span className="text-sm font-bold">AUTO-UPDATED!</span>
+                      <span className="text-sm font-bold">UPDATED!</span>
                     </div>
                   )}
                 </CardTitle>
@@ -310,15 +302,14 @@ export default function AnalyticsPage({
                     className={`text-8xl font-bold transition-all duration-700 ${
                       isNewClick ? "text-green-600 scale-110 drop-shadow-lg" : "text-blue-600"
                     }`}
-                    onClick={handleElementClick("click-counter")}
                   >
                     {clickCount}
                   </div>
-                  <p className="text-gray-600 mt-2 text-lg">Total Clicks (Auto-Updated)</p>
+                  <p className="text-gray-600 mt-2 text-lg">Updates automatically when short URL is clicked</p>
                   {isNewClick && (
                     <div className="mt-4 p-3 bg-green-100 rounded-lg border border-green-300">
                       <div className="text-green-700 font-bold text-lg animate-bounce">
-                        🎉 Updated automatically - No refresh needed!
+                        🎉 Short URL was clicked - Updated instantly!
                       </div>
                       <div className="text-green-600 text-sm mt-1">Real-time Firestore sync active</div>
                     </div>
@@ -363,10 +354,7 @@ export default function AnalyticsPage({
                     <Calendar className="h-4 w-4" />
                     Created {urlData.createdAt?.toDate?.()?.toLocaleDateString() || "Unknown"}
                   </div>
-                  <div className="flex items-center gap-1">
-                    <MousePointer className="h-4 w-4" />
-                    {analyticsData?.totalClicks || urlData.clicks || 0} total clicks
-                  </div>
+                  {/* Remove this entire div that shows total clicks */}
                 </div>
               </CardContent>
             </Card>

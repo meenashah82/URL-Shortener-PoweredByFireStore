@@ -60,19 +60,28 @@ export class RealTimeClickTracker {
     const urlRef = doc(db, "urls", this.shortCode)
     const analyticsRef = doc(db, "analytics", this.shortCode)
 
-    // Use Promise.all for concurrent updates
-    await Promise.all([
-      updateDoc(urlRef, {
-        clicks: increment(1),
-        lastClickAt: serverTimestamp(),
-      }),
-      updateDoc(analyticsRef, {
-        totalClicks: increment(1),
-        lastClickAt: serverTimestamp(),
+    // Only increment URL clicks for direct clicks, not analytics page interactions
+    if (clickEvent.clickSource === "direct") {
+      // Use Promise.all for concurrent updates
+      await Promise.all([
+        updateDoc(urlRef, {
+          clicks: increment(1),
+          lastClickAt: serverTimestamp(),
+        }),
+        updateDoc(analyticsRef, {
+          totalClicks: increment(1),
+          lastClickAt: serverTimestamp(),
+          clickEvents: arrayUnion(clickEvent),
+          lastSessionId: this.sessionId,
+        }),
+      ])
+    } else {
+      // For analytics page interactions, only log the event without incrementing clicks
+      await updateDoc(analyticsRef, {
         clickEvents: arrayUnion(clickEvent),
         lastSessionId: this.sessionId,
-      }),
-    ])
+      })
+    }
   }
 
   private async getClientIP(): Promise<string> {

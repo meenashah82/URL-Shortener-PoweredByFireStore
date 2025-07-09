@@ -122,7 +122,7 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
                 }`}
               >
                 {connectionStatus === "connected"
-                  ? "Real-time updates active - No refresh needed!"
+                  ? "Real-time updates active - Clicks update instantly!"
                   : connectionStatus === "connecting"
                     ? "Connecting to real-time updates..."
                     : "Connection lost - Attempting to reconnect..."}

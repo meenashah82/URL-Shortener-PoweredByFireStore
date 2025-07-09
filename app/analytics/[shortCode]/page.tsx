@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, ExternalLink, Calendar, Globe, Loader2, Zap, Target } from "lucide-react"
 import Link from "next/link"
-import { getUrlData, type UrlData } from "@/lib/analytics"
+import { getUrlData, subscribeToAnalytics, type UrlData } from "@/lib/analytics"
 import { RealTimeClickTracker } from "@/lib/real-time-tracker"
 import { AutoRefreshAnalytics } from "@/components/auto-refresh-analytics"
 
@@ -25,11 +25,11 @@ export default function AnalyticsPage({
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [clickCount, setClickCount] = useState(0)
   const [isNewClick, setIsNewClick] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting")
 
   const trackerRef = useRef<RealTimeClickTracker | null>(null)
   const previousClickCount = useRef(0)
   const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const unsubscribeRef = useRef<(() => void) | null>(null)
 
   // Initialize real-time tracker
   useEffect(() => {
@@ -41,6 +41,9 @@ export default function AnalyticsPage({
       }
       if (animationTimeoutRef.current) {
         clearTimeout(animationTimeoutRef.current)
+      }
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current()
       }
     }
   }, [shortCode])
@@ -79,9 +82,52 @@ export default function AnalyticsPage({
     }
   }
 
+  // Handle real-time analytics updates
+  const handleAnalyticsUpdate = (data: any) => {
+    console.log("📡 Analytics update received:", {
+      totalClicks: data?.totalClicks || 0,
+      clickEventsCount: data?.clickEvents?.length || 0,
+      timestamp: new Date().toISOString(),
+    })
+
+    // Update analytics data immediately
+    setAnalyticsData(data)
+    setIsRealTime(true)
+    setLastUpdate(new Date())
+
+    // Notify AutoRefreshAnalytics component
+    if ((window as any).analyticsHandlers) {
+      ;(window as any).analyticsHandlers.handleUpdate(data)
+    }
+
+    // Handle click count updates with enhanced animation
+    const newClickCount = data?.totalClicks || 0
+    if (newClickCount !== previousClickCount.current) {
+      console.log(`🎉 Click count changed! ${previousClickCount.current} → ${newClickCount}`)
+
+      setIsNewClick(true)
+      setClickCount(newClickCount)
+      previousClickCount.current = newClickCount
+
+      // Auto-refresh URL data to sync with analytics
+      refreshData()
+
+      // Clear previous timeout
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current)
+      }
+
+      // Remove animation after 3 seconds
+      animationTimeoutRef.current = setTimeout(() => {
+        setIsNewClick(false)
+      }, 3000)
+    }
+  }
+
   useEffect(() => {
     async function fetchInitialData() {
       try {
+        console.log(`📊 Loading initial data for: ${shortCode}`)
         const urlResult = await getUrlData(shortCode)
         if (!urlResult) {
           setError("Short code not found")
@@ -90,7 +136,9 @@ export default function AnalyticsPage({
         setUrlData(urlResult)
         setClickCount(urlResult.clicks || 0)
         previousClickCount.current = urlResult.clicks || 0
+        console.log("✅ Initial data loaded successfully")
       } catch (err) {
+        console.error("❌ Error loading initial data:", err)
         setError(err instanceof Error ? err.message : "An error occurred")
       } finally {
         setLoading(false)
@@ -99,64 +147,40 @@ export default function AnalyticsPage({
 
     fetchInitialData()
 
-    // Set up enhanced real-time listener with automatic updates
-    if (trackerRef.current) {
-      console.log("🔄 Setting up real-time analytics listener...")
+    // Set up real-time listener using the analytics library
+    console.log("🔗 Setting up real-time analytics subscription...")
 
-      const unsubscribe = trackerRef.current.subscribeToRealTimeUpdates((data) => {
-        console.log("📡 Real-time analytics update received:", {
-          totalClicks: data.totalClicks,
-          clickEventsCount: data.clickEvents?.length || 0,
-          timestamp: new Date().toISOString(),
-        })
-
-        // Update analytics data immediately
-        setAnalyticsData(data)
-        setIsRealTime(true)
-        setLastUpdate(new Date())
-        setConnectionStatus("connected")
-
-        // Handle click count updates with enhanced animation
-        const newClickCount = data.totalClicks || 0
-        if (newClickCount !== previousClickCount.current) {
-          console.log(`🎉 Click count changed! ${previousClickCount.current} → ${newClickCount}`)
-
-          setIsNewClick(true)
-          setClickCount(newClickCount)
-          previousClickCount.current = newClickCount
-
-          // Auto-refresh URL data to sync with analytics
-          refreshData()
-
-          // Clear previous timeout
-          if (animationTimeoutRef.current) {
-            clearTimeout(animationTimeoutRef.current)
-          }
-
-          // Remove animation after 3 seconds
-          animationTimeoutRef.current = setTimeout(() => {
-            setIsNewClick(false)
-          }, 3000)
-        }
-      })
-
-      // Set up connection monitoring
-      const connectionMonitor = setInterval(() => {
-        if (!isRealTime) {
-          setConnectionStatus("connecting")
-        }
-      }, 5000)
-
-      return () => {
-        console.log("🔌 Cleaning up real-time listeners...")
-        unsubscribe()
-        clearInterval(connectionMonitor)
-        if (animationTimeoutRef.current) {
-          clearTimeout(animationTimeoutRef.current)
+    const unsubscribe = subscribeToAnalytics(shortCode, (data) => {
+      if (data) {
+        handleAnalyticsUpdate(data)
+      } else {
+        console.log("❌ No analytics data received")
+        if ((window as any).analyticsHandlers) {
+          ;(window as any).analyticsHandlers.handleError()
         }
       }
+    })
+
+    unsubscribeRef.current = unsubscribe
+
+    // Initial connection success notification
+    setTimeout(() => {
+      if ((window as any).analyticsHandlers) {
+        console.log("🎉 Initial connection established")
+        ;(window as any).analyticsHandlers.handleUpdate(analyticsData || { totalClicks: clickCount, clickEvents: [] })
+      }
+    }, 1000)
+
+    return () => {
+      console.log("🔌 Cleaning up real-time listeners...")
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current()
+      }
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current)
+      }
     }
-  }, [shortCode, isRealTime])
+  }, [shortCode])
 
   // Auto-refresh URL data when analytics update
   useEffect(() => {
@@ -236,32 +260,10 @@ export default function AnalyticsPage({
             shortCode={shortCode}
             onDataUpdate={(data) => {
               console.log("🔄 Auto-refresh triggered data update")
-              setAnalyticsData(data)
-              setIsRealTime(true)
-              setLastUpdate(new Date())
-
-              // Update click count if changed
-              const newClickCount = data.totalClicks || 0
-              if (newClickCount !== previousClickCount.current) {
-                setIsNewClick(true)
-                setClickCount(newClickCount)
-                previousClickCount.current = newClickCount
-
-                // Auto-refresh URL data
-                refreshData()
-
-                // Clear animation after delay
-                if (animationTimeoutRef.current) {
-                  clearTimeout(animationTimeoutRef.current)
-                }
-                animationTimeoutRef.current = setTimeout(() => {
-                  setIsNewClick(false)
-                }, 3000)
-              }
+              handleAnalyticsUpdate(data)
             }}
           >
-            {/* All existing content goes here - Header, Cards, etc. */}
-            {/* Header with Real-time Status */}
+            {/* Header */}
             <div className="flex items-center gap-4 mb-8">
               <Link href="/">
                 <Button variant="outline" size="sm" onClick={handleElementClick("back-button")}>
@@ -269,12 +271,10 @@ export default function AnalyticsPage({
                   Back to Home
                 </Button>
               </Link>
-              <h1 className="text-2xl font-bold text-gray-900">Auto-Updating Analytics Dashboard</h1>
-              {/* Remove the Manual Refresh button completely */}
+              <h1 className="text-2xl font-bold text-gray-900">Real-Time Analytics Dashboard</h1>
             </div>
 
-            {/* Rest of the existing content remains the same */}
-            {/* Real-time Click Counter with Enhanced Animation */}
+            {/* Real-time Click Counter */}
             <Card
               className={`mb-8 transition-all duration-500 ${
                 isNewClick ? "border-4 border-green-400 shadow-lg shadow-green-200" : "border-2 border-blue-200"
@@ -318,8 +318,6 @@ export default function AnalyticsPage({
               </CardContent>
             </Card>
 
-            {/* Continue with all other existing cards and content... */}
-            {/* The rest of your existing JSX remains exactly the same */}
             {/* URL Info */}
             <Card className="mb-8">
               <CardHeader>
@@ -354,7 +352,6 @@ export default function AnalyticsPage({
                     <Calendar className="h-4 w-4" />
                     Created {urlData.createdAt?.toDate?.()?.toLocaleDateString() || "Unknown"}
                   </div>
-                  {/* Remove this entire div that shows total clicks */}
                 </div>
               </CardContent>
             </Card>

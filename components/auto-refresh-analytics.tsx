@@ -18,9 +18,18 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
   const [updateCount, setUpdateCount] = useState(0)
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null)
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     console.log(`🚀 Initializing auto-refresh analytics for: ${shortCode}`)
+
+    // Set connection timeout - if no update within 10 seconds, mark as connected anyway
+    connectionTimeoutRef.current = setTimeout(() => {
+      if (connectionStatus === "connecting") {
+        console.log("⏰ Connection timeout - assuming connected")
+        setConnectionStatus("connected")
+      }
+    }, 10000)
 
     // Set up heartbeat to monitor connection
     const startHeartbeat = () => {
@@ -29,13 +38,13 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
       }
 
       heartbeatRef.current = setInterval(() => {
-        if (connectionStatus === "connected") {
-          console.log("💓 Analytics heartbeat - connection healthy")
-        } else {
-          console.log("⚠️ Analytics heartbeat - connection issues detected")
+        console.log("💓 Analytics heartbeat check")
+        // Don't change status if we're already connected and receiving updates
+        if (lastUpdate && Date.now() - lastUpdate.getTime() > 30000) {
+          console.log("⚠️ No updates for 30 seconds - checking connection")
           setConnectionStatus("connecting")
         }
-      }, 10000) // Check every 10 seconds
+      }, 15000) // Check every 15 seconds
     }
 
     // Set up retry mechanism
@@ -56,6 +65,7 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
       console.log("📊 Auto-refresh: Data update received", {
         updateCount: updateCount + 1,
         timestamp: new Date().toISOString(),
+        totalClicks: data.totalClicks,
       })
 
       setConnectionStatus("connected")
@@ -67,6 +77,11 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current)
       }
+
+      // Clear connection timeout since we got an update
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current)
+      }
     }
 
     // Handle connection errors
@@ -74,6 +89,12 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
       console.log("❌ Auto-refresh: Connection error detected")
       setConnectionStatus("disconnected")
       setupRetry()
+    }
+
+    // Expose handlers for parent component
+    ;(window as any).analyticsHandlers = {
+      handleUpdate,
+      handleError,
     }
 
     startHeartbeat()
@@ -86,8 +107,12 @@ export function AutoRefreshAnalytics({ shortCode, onDataUpdate, children }: Auto
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current)
       }
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current)
+      }
+      delete (window as any).analyticsHandlers
     }
-  }, [shortCode, connectionStatus, updateCount, onDataUpdate])
+  }, [shortCode, onDataUpdate, connectionStatus, updateCount, lastUpdate])
 
   return (
     <div className="space-y-4">

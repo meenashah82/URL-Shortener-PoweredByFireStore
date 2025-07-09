@@ -117,11 +117,13 @@ export async function getAnalyticsData(shortCode: string): Promise<AnalyticsData
   }
 }
 
-// Enhanced real-time listener for analytics data with automatic browser updates
+// Enhanced real-time listener for analytics data with proper connection handling
 export function subscribeToAnalytics(shortCode: string, callback: (data: AnalyticsData | null) => void): () => void {
   const analyticsRef = doc(db, "analytics", shortCode)
 
   console.log(`🔄 Starting real-time analytics subscription for: ${shortCode}`)
+
+  let isFirstLoad = true
 
   return onSnapshot(
     analyticsRef,
@@ -142,42 +144,40 @@ export function subscribeToAnalytics(shortCode: string, callback: (data: Analyti
           hasPendingWrites: doc.metadata.hasPendingWrites,
           source: doc.metadata.fromCache ? "local-cache" : "server",
           timestamp,
+          isFirstLoad,
         })
 
-        // Always trigger callback for any change, including local changes
+        // Always trigger callback for any change
         callback(data)
 
-        // If this is a pending write, set up a follow-up listener for server confirmation
-        if (doc.metadata.hasPendingWrites) {
-          console.log("⏳ Pending write detected, waiting for server confirmation...")
-
-          // Set up a one-time listener for server confirmation
-          const serverConfirmListener = onSnapshot(
-            analyticsRef,
-            { includeMetadataChanges: false }, // Only server updates
-            (serverDoc) => {
-              if (serverDoc.exists() && !serverDoc.metadata.hasPendingWrites) {
-                console.log("✅ Server confirmation received")
-                callback(serverDoc.data() as AnalyticsData)
-                serverConfirmListener() // Unsubscribe after confirmation
-              }
-            },
-          )
+        if (isFirstLoad) {
+          isFirstLoad = false
+          console.log("✅ Initial analytics data loaded successfully")
         }
       } else {
         console.log(`❌ No analytics document found for: ${shortCode}`)
-        callback(null)
+
+        // Create empty analytics document if it doesn't exist
+        const emptyAnalytics: AnalyticsData = {
+          shortCode,
+          totalClicks: 0,
+          createdAt: serverTimestamp(),
+          clickEvents: [],
+        }
+
+        setDoc(analyticsRef, emptyAnalytics)
+          .then(() => {
+            console.log("📝 Created empty analytics document")
+            callback(emptyAnalytics)
+          })
+          .catch((error) => {
+            console.error("❌ Error creating analytics document:", error)
+            callback(null)
+          })
       }
     },
     (error) => {
       console.error("❌ Real-time analytics subscription error:", error)
-
-      // Implement retry logic
-      setTimeout(() => {
-        console.log("🔄 Retrying analytics subscription...")
-        subscribeToAnalytics(shortCode, callback)
-      }, 2000)
-
       callback(null)
     },
   )

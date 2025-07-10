@@ -40,10 +40,11 @@ export interface UrlData {
 // Analytics is the SINGLE SOURCE OF TRUTH for clicks
 export interface AnalyticsData {
   shortCode: string
-  totalClicks: number // ✅ ONLY place clicks are stored
+  totalClicks: number // ✅ ONLY field for click tracking
   createdAt: any
   lastClickAt?: any
   clickEvents: ClickEvent[]
+  // ❌ REMOVE any other click-related fields
 }
 
 // Create short URL - NO click tracking in URL document

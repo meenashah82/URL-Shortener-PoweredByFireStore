@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { doc, getDoc, runTransaction, serverTimestamp, increment, arrayUnion } from "firebase/firestore"
+import { doc, getDoc, runTransaction, serverTimestamp, arrayUnion } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
 interface UrlData {
@@ -117,21 +117,28 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
       realTime: true,
     }
 
-    console.log(`🔄 Starting analytics transaction for: ${shortCode}`)
+    console.log(`🔄 Recording click for ${shortCode} - Starting transaction`)
 
-    // Use transaction for atomic updates
+    // Use transaction for atomic updates with better error handling
     await runTransaction(db, async (transaction) => {
       const analyticsDoc = await transaction.get(analyticsRef)
 
       if (analyticsDoc.exists()) {
-        // Update existing analytics
+        const currentData = analyticsDoc.data()
+        const currentClicks = currentData.totalClicks || 0
+        const newClickCount = currentClicks + 1
+
+        console.log(`📈 Updating analytics: ${currentClicks} → ${newClickCount}`)
+
+        // Update existing analytics with explicit values
         transaction.update(analyticsRef, {
-          totalClicks: increment(1),
+          totalClicks: newClickCount,
           lastClickAt: serverTimestamp(),
           clickEvents: arrayUnion(clickEvent),
         })
-        console.log(`📈 Updated existing analytics for: ${shortCode}`)
       } else {
+        console.log(`📝 Creating new analytics document for: ${shortCode}`)
+
         // Create new analytics document
         transaction.set(analyticsRef, {
           shortCode,
@@ -140,13 +147,12 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
           lastClickAt: serverTimestamp(),
           clickEvents: [clickEvent],
         })
-        console.log(`📝 Created new analytics for: ${shortCode}`)
       }
     })
 
-    console.log(`✅ Analytics transaction completed for: ${shortCode}`)
+    console.log(`✅ Click analytics recorded successfully for: ${shortCode}`)
   } catch (error) {
-    console.error("❌ Error recording analytics:", error)
+    console.error(`❌ Error recording analytics for ${shortCode}:`, error)
     throw error
   }
 }

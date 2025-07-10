@@ -1,10 +1,9 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Activity, TrendingUp, Clock, Zap, Target } from "lucide-react"
-import { RealTimeClickTracker } from "@/lib/real-time-tracker"
-import { subscribeToRecentClicks, subscribeToTopUrls } from "@/lib/analytics"
+import { Activity, TrendingUp, Clock, Zap, Wifi } from "lucide-react"
+import { realTimeAnalytics } from "@/lib/real-time-analytics"
 
 export function RealTimeDashboard() {
   const [recentClicks, setRecentClicks] = useState<any[]>([])
@@ -13,47 +12,39 @@ export function RealTimeDashboard() {
   const [liveClickCount, setLiveClickCount] = useState(0)
   const [lastClickTime, setLastClickTime] = useState<Date | null>(null)
 
-  const trackerRef = useRef<RealTimeClickTracker | null>(null)
-
   useEffect(() => {
-    // Initialize tracker for dashboard
-    trackerRef.current = new RealTimeClickTracker("dashboard")
+    console.log("📊 Setting up real-time dashboard")
 
-    // Subscribe to recent clicks with real-time updates
-    const unsubscribeClicks = subscribeToRecentClicks((clicks) => {
-      console.log("📊 Dashboard: Recent clicks updated", clicks.length)
-      setRecentClicks(clicks)
-      setIsConnected(true)
-      setLiveClickCount(clicks.length)
-      if (clicks.length > 0) {
+    // Subscribe to dashboard data
+    const unsubscribe = realTimeAnalytics.subscribeToDashboard((data) => {
+      console.log("📈 Dashboard data update:", {
+        recentClicksCount: data.recentClicks.length,
+        topUrlsCount: data.topUrls.length,
+      })
+
+      if (data.recentClicks.length > 0) {
+        setRecentClicks(data.recentClicks)
+        setLiveClickCount(data.recentClicks.length)
         setLastClickTime(new Date())
       }
+
+      if (data.topUrls.length > 0) {
+        setTopUrls(data.topUrls)
+      }
+
+      setIsConnected(true)
     })
 
-    // Subscribe to top URLs
-    const unsubscribeUrls = subscribeToTopUrls((urls) => {
-      console.log("📈 Dashboard: Top URLs updated", urls.length)
-      setTopUrls(urls)
+    // Monitor connection status
+    const statusUnsubscribe = realTimeAnalytics.onConnectionStatusChange((status) => {
+      setIsConnected(status === "connected")
     })
 
     return () => {
-      unsubscribeClicks()
-      unsubscribeUrls()
-      if (trackerRef.current) {
-        trackerRef.current.destroy()
-      }
+      unsubscribe()
+      statusUnsubscribe()
     }
   }, [])
-
-  const trackDashboardClick = async (element: string) => {
-    if (trackerRef.current) {
-      await trackerRef.current.trackClick("analytics_page", {
-        element,
-        dashboard: true,
-        timestamp: new Date().toISOString(),
-      })
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -61,8 +52,8 @@ export function RealTimeDashboard() {
       <Card className="border-2 border-green-200 bg-gradient-to-r from-green-50 to-blue-50">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Target className="h-5 w-5 text-green-600" />
-            Real-Time Tracking Status
+            <Wifi className="h-5 w-5 text-green-600" />
+            Real-Time WebSocket Status
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -70,7 +61,7 @@ export function RealTimeDashboard() {
             <div className="flex items-center gap-3">
               <div className={`w-4 h-4 rounded-full ${isConnected ? "bg-green-500 animate-pulse" : "bg-gray-400"}`} />
               <span className={`font-medium ${isConnected ? "text-green-600" : "text-gray-500"}`}>
-                {isConnected ? "Real-time tracking active" : "Connecting..."}
+                {isConnected ? "🔥 Firestore WebSocket connected - Live updates active!" : "Connecting..."}
               </span>
               {isConnected && <Activity className="h-4 w-4 text-green-600" />}
             </div>
@@ -99,7 +90,8 @@ export function RealTimeDashboard() {
             {recentClicks.length === 0 ? (
               <div className="text-center py-8">
                 <Zap className="h-12 w-12 text-gray-300 mx-auto mb-2" />
-                <p className="text-gray-500 text-sm">Waiting for real-time activity...</p>
+                <p className="text-gray-500 text-sm">Waiting for real-time click activity...</p>
+                <p className="text-xs text-gray-400 mt-1">WebSocket ready for instant updates!</p>
               </div>
             ) : (
               <div className="space-y-3 max-h-96 overflow-y-auto">
@@ -109,7 +101,6 @@ export function RealTimeDashboard() {
                     className={`p-3 rounded-lg transition-all duration-500 cursor-pointer hover:bg-gray-100 ${
                       index === 0 ? "bg-green-100 border-2 border-green-300 animate-pulse" : "bg-gray-50"
                     }`}
-                    onClick={() => trackDashboardClick(`activity-${index}`)}
                   >
                     <div className="flex items-center justify-between">
                       <code className="text-sm font-mono text-blue-600">/{click.shortCode}</code>
@@ -131,7 +122,12 @@ export function RealTimeDashboard() {
                         })()}
                       </div>
                     )}
-                    {click.clickSource && <div className="text-xs text-blue-600 mt-1">Source: {click.clickSource}</div>}
+                    {click.clickSource && (
+                      <div className="text-xs text-blue-600 mt-1">
+                        Source: {click.clickSource}
+                        {click.clickSource === "direct" && " 🎯"}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -144,7 +140,7 @@ export function RealTimeDashboard() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <TrendingUp className="h-5 w-5" />
-              Top Performing URLs
+              Top Performing URLs (Live)
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -159,7 +155,6 @@ export function RealTimeDashboard() {
                   <div
                     key={url.shortCode}
                     className="p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors"
-                    onClick={() => trackDashboardClick(`top-url-${index}`)}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <code className="text-sm font-mono text-blue-600">/{url.shortCode}</code>

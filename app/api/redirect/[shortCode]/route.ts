@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { doc, getDoc, runTransaction, serverTimestamp, arrayUnion, increment } from "firebase/firestore"
+import { doc, getDoc, runTransaction, serverTimestamp, arrayUnion, updateDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
 interface UrlData {
@@ -117,18 +117,22 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
       realTime: true,
     }
 
-    console.log(`🔄 Recording click for ${shortCode} - Starting transaction`)
+    console.log(`🔄 Recording click for ${shortCode} - Starting improved transaction`)
 
-    // Use transaction for atomic updates with increment()
+    // Use a more robust transaction approach
     await runTransaction(db, async (transaction) => {
       const analyticsDoc = await transaction.get(analyticsRef)
 
       if (analyticsDoc.exists()) {
-        console.log(`📈 Updating existing analytics document for: ${shortCode}`)
+        const currentData = analyticsDoc.data()
+        const currentClicks = currentData.totalClicks || 0
+        const newClickCount = currentClicks + 1
 
-        // Update existing analytics using increment() for atomic operation
+        console.log(`📈 Incrementing totalClicks: ${currentClicks} → ${newClickCount}`)
+
+        // Update with explicit new value instead of increment()
         transaction.update(analyticsRef, {
-          totalClicks: increment(1), // ✅ This ensures atomic increment
+          totalClicks: newClickCount,
           lastClickAt: serverTimestamp(),
           clickEvents: arrayUnion(clickEvent),
         })
@@ -138,7 +142,7 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
         // Create new analytics document
         transaction.set(analyticsRef, {
           shortCode,
-          totalClicks: 1, // ✅ Start with 1 for new document
+          totalClicks: 1,
           createdAt: serverTimestamp(),
           lastClickAt: serverTimestamp(),
           clickEvents: [clickEvent],
@@ -149,6 +153,28 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
     console.log(`✅ Click analytics recorded successfully for: ${shortCode}`)
   } catch (error) {
     console.error(`❌ Error recording analytics for ${shortCode}:`, error)
+
+    // Fallback: try a simple update without transaction
+    try {
+      console.log(`🔄 Attempting fallback update for ${shortCode}`)
+      const analyticsRef = doc(db, "analytics", shortCode)
+      const analyticsSnap = await getDoc(analyticsRef)
+
+      if (analyticsSnap.exists()) {
+        const currentData = analyticsSnap.data()
+        const newCount = (currentData.totalClicks || 0) + 1
+
+        await updateDoc(analyticsRef, {
+          totalClicks: newCount,
+          lastClickAt: serverTimestamp(),
+        })
+
+        console.log(`✅ Fallback update successful: ${newCount}`)
+      }
+    } catch (fallbackError) {
+      console.error(`❌ Fallback also failed:`, fallbackError)
+    }
+
     throw error
   }
 }

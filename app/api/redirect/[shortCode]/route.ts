@@ -54,9 +54,9 @@ export async function GET(request: NextRequest, { params }: { params: { shortCod
     const forwardedFor = request.headers.get("x-forwarded-for") || ""
     const ip = forwardedFor.split(",")[0]?.trim() || ""
 
-    // Record the click with immediate Firestore update
-    console.log(`📊 Recording click analytics...`)
-    await recordClickImmediately(shortCode, userAgent, referer, ip)
+    // Record the click with proper analytics tracking
+    console.log(`📊 Recording click analytics for: ${shortCode}`)
+    await recordClickWithProperAnalytics(shortCode, userAgent, referer, ip)
 
     console.log(`🚀 Redirect complete for: ${shortCode}`)
 
@@ -68,21 +68,27 @@ export async function GET(request: NextRequest, { params }: { params: { shortCod
   }
 }
 
-async function recordClickImmediately(shortCode: string, userAgent: string, referer: string, ip: string) {
+async function recordClickWithProperAnalytics(shortCode: string, userAgent: string, referer: string, ip: string) {
   try {
     const urlRef = doc(db, "urls", shortCode)
     const analyticsRef = doc(db, "analytics", shortCode)
 
-    // Use transaction for immediate, atomic updates
-    await runTransaction(db, async (transaction) => {
-      console.log(`🔄 Starting transaction for ${shortCode}`)
+    console.log(`🔄 Starting analytics transaction for: ${shortCode}`)
 
+    // Use transaction for atomic updates
+    await runTransaction(db, async (transaction) => {
       const urlDoc = await transaction.get(urlRef)
       const analyticsDoc = await transaction.get(analyticsRef)
 
       if (!urlDoc.exists()) {
         throw new Error("URL document does not exist")
       }
+
+      const currentUrlData = urlDoc.data()
+      const currentClicks = currentUrlData.clicks || 0
+      const newClickCount = currentClicks + 1
+
+      console.log(`📈 Incrementing clicks: ${currentClicks} → ${newClickCount}`)
 
       const clickEvent = {
         id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -95,37 +101,47 @@ async function recordClickImmediately(shortCode: string, userAgent: string, refe
         realTime: true,
       }
 
-      console.log(`📝 Adding click event:`, clickEvent)
-
-      // Update URL document
+      // Update URL document with incremented clicks
       transaction.update(urlRef, {
         clicks: increment(1),
         lastClickAt: serverTimestamp(),
       })
 
-      // Update or create analytics document
+      // Update or create analytics document with proper click tracking
       if (analyticsDoc.exists()) {
+        const currentAnalytics = analyticsDoc.data()
+        const currentTotalClicks = currentAnalytics.totalClicks || 0
+        const newTotalClicks = currentTotalClicks + 1
+
+        console.log(`📊 Updating analytics: totalClicks ${currentTotalClicks} → ${newTotalClicks}`)
+
         transaction.update(analyticsRef, {
-          totalClicks: increment(1),
+          totalClicks: increment(1), // This ensures proper increment
           lastClickAt: serverTimestamp(),
           clickEvents: arrayUnion(clickEvent),
+          // Keep track of the URL clicks for consistency
+          urlClicks: newClickCount,
         })
       } else {
+        console.log(`📝 Creating new analytics document for: ${shortCode}`)
+
+        // Create new analytics document
         transaction.set(analyticsRef, {
           shortCode,
-          totalClicks: 1,
+          totalClicks: 1, // Start with 1 for the first click
           createdAt: serverTimestamp(),
           lastClickAt: serverTimestamp(),
           clickEvents: [clickEvent],
+          urlClicks: newClickCount,
         })
       }
 
-      console.log(`✅ Transaction completed for ${shortCode}`)
+      console.log(`✅ Analytics transaction completed for: ${shortCode}`)
     })
 
-    console.log(`🎉 Click recorded successfully for ${shortCode}`)
+    console.log(`🎉 Click recorded successfully for: ${shortCode}`)
   } catch (error) {
-    console.error("❌ Error recording click:", error)
+    console.error("❌ Error recording click analytics:", error)
     // Don't throw - we don't want to break the redirect
   }
 }

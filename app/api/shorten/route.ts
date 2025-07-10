@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createShortUrl } from "@/lib/analytics"
+import { doc, setDoc, getDoc, serverTimestamp, Timestamp } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 
 function generateShortCode(length = 6): string {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -38,28 +39,65 @@ export async function POST(request: NextRequest) {
 
     // Generate a unique short code
     console.log("2. Generating short code...")
-    const shortCode = generateShortCode()
-    const attempts = 0
+    let shortCode = generateShortCode()
+    let attempts = 0
     const maxAttempts = 10
 
-    // Note: In a production app, you'd want to check for uniqueness in Firestore
-    // For now, we'll assume the generated code is unique
+    // Check for uniqueness
     while (attempts < maxAttempts) {
-      // You could add a check here to see if the shortCode already exists
-      break
+      const urlRef = doc(db, "urls", shortCode)
+      const existingDoc = await getDoc(urlRef)
+
+      if (!existingDoc.exists()) {
+        break // Found unique code
+      }
+
+      shortCode = generateShortCode()
+      attempts++
+      console.log(`3. Code ${shortCode} exists, trying again (attempt ${attempts})`)
     }
 
-    console.log("3. Final short code:", shortCode)
+    if (attempts >= maxAttempts) {
+      console.log("ERROR: Could not generate unique short code")
+      return NextResponse.json({ error: "Could not generate unique short code" }, { status: 500 })
+    }
 
-    // Create the short URL in Firestore
-    console.log("4. Creating short URL in Firestore...")
-    await createShortUrl(shortCode, url)
-    console.log("5. Short URL created successfully")
+    console.log("4. Final short code:", shortCode)
+
+    // Create expiration date (30 days from now)
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + 30)
+
+    // Create URL document
+    const urlRef = doc(db, "urls", shortCode)
+    const analyticsRef = doc(db, "analytics", shortCode)
+
+    const urlData = {
+      originalUrl: url,
+      shortCode,
+      createdAt: serverTimestamp(),
+      isActive: true,
+      expiresAt: Timestamp.fromDate(expiresAt),
+    }
+
+    const analyticsData = {
+      shortCode,
+      totalClicks: 0,
+      createdAt: serverTimestamp(),
+      clickEvents: [],
+    }
+
+    console.log("5. Creating documents in Firestore...")
+
+    // Create both documents
+    await Promise.all([setDoc(urlRef, urlData), setDoc(analyticsRef, analyticsData)])
+
+    console.log("6. Documents created successfully")
 
     const baseUrl = request.nextUrl.origin
     const shortUrl = `${baseUrl}/${shortCode}`
 
-    console.log("6. Short URL created:", shortUrl)
+    console.log("7. Short URL created:", shortUrl)
     console.log("=== SHORTEN URL COMPLETE ===")
 
     return NextResponse.json({

@@ -10,13 +10,11 @@ import {
   limit,
   onSnapshot,
   Timestamp,
-  runTransaction,
-  getDocs, // Import getDocs
 } from "firebase/firestore"
 import { db } from "./firebase"
 
 export interface ClickEvent {
-  timestamp: any // Firestore timestamp
+  timestamp: any
   userAgent?: string
   referer?: string
   ip?: string
@@ -30,23 +28,22 @@ export interface ClickEvent {
 export interface UrlData {
   originalUrl: string
   shortCode: string
-  createdAt: any // Firestore timestamp
-  clicks: number
+  createdAt: any
+  clicks?: number // Optional for backward compatibility
   isActive: boolean
-  expiresAt: any // Firestore timestamp
-  lastClickAt?: any // Add last click timestamp
+  expiresAt: any
+  lastClickAt?: any
 }
 
 export interface AnalyticsData {
   shortCode: string
   totalClicks: number
-  createdAt: any // Firestore timestamp
-  lastClickAt?: any // Firestore timestamp
+  createdAt: any
+  lastClickAt?: any
   clickEvents: ClickEvent[]
-  urlClicks?: number // Track URL clicks for consistency
 }
 
-// Create a new short URL with proper analytics initialization
+// Create a new short URL
 export async function createShortUrl(shortCode: string, originalUrl: string): Promise<void> {
   try {
     console.log(`Creating short URL: ${shortCode} -> ${originalUrl}`)
@@ -61,25 +58,21 @@ export async function createShortUrl(shortCode: string, originalUrl: string): Pr
       originalUrl,
       shortCode,
       createdAt: serverTimestamp(),
-      clicks: 0, // Start with 0 clicks
       isActive: true,
       expiresAt: Timestamp.fromDate(expiresAt),
     }
 
     const analyticsData: AnalyticsData = {
       shortCode,
-      totalClicks: 0, // Start with 0 clicks
+      totalClicks: 0,
       createdAt: serverTimestamp(),
       clickEvents: [],
-      urlClicks: 0, // Track URL clicks separately
     }
 
-    // Create both documents atomically
     await Promise.all([setDoc(urlRef, urlData), setDoc(analyticsRef, analyticsData)])
-
-    console.log(`✅ Short URL and analytics created successfully: ${shortCode}`)
+    console.log(`Short URL created successfully: ${shortCode}`)
   } catch (error) {
-    console.error("❌ Error creating short URL:", error)
+    console.error("Error creating short URL:", error)
     throw error
   }
 }
@@ -91,6 +84,7 @@ export async function getUrlData(shortCode: string): Promise<UrlData | null> {
     const urlSnap = await getDoc(urlRef)
 
     if (!urlSnap.exists()) {
+      console.log(`URL document not found: ${shortCode}`)
       return null
     }
 
@@ -98,6 +92,7 @@ export async function getUrlData(shortCode: string): Promise<UrlData | null> {
 
     // Check if URL has expired
     if ((data.expiresAt && data.expiresAt.toDate() < new Date()) || !data.isActive) {
+      console.log(`URL expired or inactive: ${shortCode}`)
       return null
     }
 
@@ -108,55 +103,18 @@ export async function getUrlData(shortCode: string): Promise<UrlData | null> {
   }
 }
 
-// Get analytics data with proper click count
+// Get analytics data
 export async function getAnalyticsData(shortCode: string): Promise<AnalyticsData | null> {
   try {
     const analyticsRef = doc(db, "analytics", shortCode)
     const analyticsSnap = await getDoc(analyticsRef)
 
     if (!analyticsSnap.exists()) {
-      // If analytics doesn't exist, create it
-      console.log(`📝 Creating missing analytics document for: ${shortCode}`)
-
-      const urlRef = doc(db, "urls", shortCode)
-      const urlSnap = await getDoc(urlRef)
-
-      if (urlSnap.exists()) {
-        const urlData = urlSnap.data() as UrlData
-        const newAnalytics: AnalyticsData = {
-          shortCode,
-          totalClicks: urlData.clicks || 0,
-          createdAt: urlData.createdAt || serverTimestamp(),
-          clickEvents: [],
-          urlClicks: urlData.clicks || 0,
-        }
-
-        await setDoc(analyticsRef, newAnalytics)
-        return newAnalytics
-      }
-
+      console.log(`Analytics document not found: ${shortCode}`)
       return null
     }
 
-    const data = analyticsSnap.data() as AnalyticsData
-
-    // Ensure totalClicks is properly set
-    if (typeof data.totalClicks !== "number") {
-      console.log(`🔧 Fixing totalClicks for: ${shortCode}`)
-
-      // Count clicks from events or use URL clicks
-      const clickCount = data.clickEvents?.length || 0
-
-      await runTransaction(db, async (transaction) => {
-        transaction.update(analyticsRef, {
-          totalClicks: clickCount,
-        })
-      })
-
-      data.totalClicks = clickCount
-    }
-
-    return data
+    return analyticsSnap.data() as AnalyticsData
   } catch (error) {
     console.error("Error getting analytics data:", error)
     return null
@@ -169,84 +127,23 @@ export function subscribeToAnalytics(shortCode: string, callback: (data: Analyti
 
   console.log(`🔄 Starting real-time analytics subscription for: ${shortCode}`)
 
-  let isFirstLoad = true
-
   return onSnapshot(
     analyticsRef,
     {
-      includeMetadataChanges: true, // Include pending writes for instant updates
+      includeMetadataChanges: true,
     },
     async (doc) => {
-      const timestamp = new Date().toISOString()
-
       if (doc.exists()) {
         const data = doc.data() as AnalyticsData
-
         console.log("📡 Analytics update received:", {
           shortCode,
           totalClicks: data.totalClicks,
           clickEventsCount: data.clickEvents?.length || 0,
-          fromCache: doc.metadata.fromCache,
-          hasPendingWrites: doc.metadata.hasPendingWrites,
-          source: doc.metadata.fromCache ? "local-cache" : "server",
-          timestamp,
-          isFirstLoad,
         })
-
-        // Fix totalClicks if it's missing or incorrect
-        if (typeof data.totalClicks !== "number" || data.totalClicks === 0) {
-          const clickCount = data.clickEvents?.length || 0
-          if (clickCount > 0) {
-            console.log(`🔧 Auto-fixing totalClicks: ${data.totalClicks} → ${clickCount}`)
-
-            try {
-              await runTransaction(db, async (transaction) => {
-                transaction.update(analyticsRef, {
-                  totalClicks: clickCount,
-                })
-              })
-
-              data.totalClicks = clickCount
-            } catch (error) {
-              console.error("Error fixing totalClicks:", error)
-            }
-          }
-        }
-
         callback(data)
-
-        if (isFirstLoad) {
-          isFirstLoad = false
-          console.log("✅ Initial analytics data loaded successfully")
-        }
       } else {
         console.log(`❌ No analytics document found for: ${shortCode}`)
-
-        // Create analytics document if it doesn't exist
-        try {
-          const urlRef = doc(db, "urls", shortCode)
-          const urlSnap = await getDoc(urlRef)
-
-          if (urlSnap.exists()) {
-            const urlData = urlSnap.data() as UrlData
-            const emptyAnalytics: AnalyticsData = {
-              shortCode,
-              totalClicks: urlData.clicks || 0,
-              createdAt: urlData.createdAt || serverTimestamp(),
-              clickEvents: [],
-              urlClicks: urlData.clicks || 0,
-            }
-
-            await setDoc(analyticsRef, emptyAnalytics)
-            console.log("📝 Created missing analytics document")
-            callback(emptyAnalytics)
-          } else {
-            callback(null)
-          }
-        } catch (error) {
-          console.error("❌ Error creating analytics document:", error)
-          callback(null)
-        }
+        callback(null)
       }
     },
     (error) => {
@@ -265,7 +162,6 @@ export function subscribeToRecentClicks(
     collection(db, "analytics"),
     where("totalClicks", ">", 0),
     orderBy("totalClicks", "desc"),
-    orderBy("lastClickAt", "desc"),
     limit(limitCount),
   )
 
@@ -288,16 +184,13 @@ export function subscribeToRecentClicks(
         }
       })
 
-      // Sort by timestamp descending and limit
-      recentClicks
-        .sort((a, b) => {
-          const aTime = a.timestamp?.seconds || 0
-          const bTime = b.timestamp?.seconds || 0
-          return bTime - aTime
-        })
-        .slice(0, limitCount)
+      recentClicks.sort((a, b) => {
+        const aTime = a.timestamp?.seconds || 0
+        const bTime = b.timestamp?.seconds || 0
+        return bTime - aTime
+      })
 
-      callback(recentClicks)
+      callback(recentClicks.slice(0, limitCount))
     },
     (error) => {
       console.error("Error in recent clicks subscription:", error)
@@ -314,8 +207,7 @@ export function subscribeToTopUrls(
   const urlsQuery = query(
     collection(db, "urls"),
     where("isActive", "==", true),
-    where("clicks", ">", 0),
-    orderBy("clicks", "desc"),
+    orderBy("createdAt", "desc"),
     limit(limitCount),
   )
 
@@ -324,61 +216,32 @@ export function subscribeToTopUrls(
     {
       includeMetadataChanges: true,
     },
-    (snapshot) => {
-      const topUrls = snapshot.docs.map((doc) => {
-        const data = doc.data() as UrlData
-        return {
-          shortCode: data.shortCode,
-          clicks: data.clicks || 0, // Ensure clicks is a number
-          originalUrl: data.originalUrl,
-        }
-      })
+    async (snapshot) => {
+      const urls: Array<{ shortCode: string; clicks: number; originalUrl: string }> = []
 
-      callback(topUrls)
+      for (const doc of snapshot.docs) {
+        const urlData = doc.data() as UrlData
+
+        // Get click count from analytics
+        const analyticsRef = doc(db, "analytics", urlData.shortCode)
+        const analyticsSnap = await getDoc(analyticsRef)
+        const clicks = analyticsSnap.exists() ? (analyticsSnap.data() as AnalyticsData).totalClicks || 0 : 0
+
+        urls.push({
+          shortCode: urlData.shortCode,
+          clicks,
+          originalUrl: urlData.originalUrl,
+        })
+      }
+
+      // Sort by clicks descending
+      urls.sort((a, b) => b.clicks - a.clicks)
+
+      callback(urls.slice(0, limitCount))
     },
     (error) => {
       console.error("Error in top URLs subscription:", error)
       callback([])
     },
   )
-}
-
-// Utility function to fix existing analytics documents
-export async function fixExistingAnalytics(): Promise<void> {
-  try {
-    console.log("🔧 Starting analytics repair process...")
-
-    const analyticsQuery = query(collection(db, "analytics"))
-    const analyticsSnapshot = await getDocs(analyticsQuery)
-
-    const fixes: Promise<void>[] = []
-
-    analyticsSnapshot.forEach((doc) => {
-      const data = doc.data() as AnalyticsData
-      const shortCode = doc.id
-
-      // Check if totalClicks needs fixing
-      if (typeof data.totalClicks !== "number" || data.totalClicks === 0) {
-        const clickCount = data.clickEvents?.length || 0
-
-        if (clickCount > 0) {
-          console.log(`🔧 Fixing analytics for ${shortCode}: totalClicks ${data.totalClicks} → ${clickCount}`)
-
-          const fix = runTransaction(db, async (transaction) => {
-            const analyticsRef = doc(db, "analytics", shortCode)
-            transaction.update(analyticsRef, {
-              totalClicks: clickCount,
-            })
-          })
-
-          fixes.push(fix)
-        }
-      }
-    })
-
-    await Promise.all(fixes)
-    console.log(`✅ Fixed ${fixes.length} analytics documents`)
-  } catch (error) {
-    console.error("❌ Error fixing analytics:", error)
-  }
 }

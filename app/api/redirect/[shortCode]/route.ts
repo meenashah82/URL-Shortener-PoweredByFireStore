@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { doc, getDoc, runTransaction, serverTimestamp, arrayUnion } from "firebase/firestore"
+import { doc, getDoc, runTransaction, serverTimestamp, arrayUnion, increment } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
 interface UrlData {
@@ -119,20 +119,16 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
 
     console.log(`🔄 Recording click for ${shortCode} - Starting transaction`)
 
-    // Use transaction for atomic updates with better error handling
+    // Use transaction for atomic updates with increment()
     await runTransaction(db, async (transaction) => {
       const analyticsDoc = await transaction.get(analyticsRef)
 
       if (analyticsDoc.exists()) {
-        const currentData = analyticsDoc.data()
-        const currentClicks = currentData.totalClicks || 0
-        const newClickCount = currentClicks + 1
+        console.log(`📈 Updating existing analytics document for: ${shortCode}`)
 
-        console.log(`📈 Updating analytics: ${currentClicks} → ${newClickCount}`)
-
-        // Update existing analytics with explicit values
+        // Update existing analytics using increment() for atomic operation
         transaction.update(analyticsRef, {
-          totalClicks: newClickCount,
+          totalClicks: increment(1), // ✅ This ensures atomic increment
           lastClickAt: serverTimestamp(),
           clickEvents: arrayUnion(clickEvent),
         })
@@ -142,7 +138,7 @@ async function recordClickAnalytics(shortCode: string, userAgent: string, refere
         // Create new analytics document
         transaction.set(analyticsRef, {
           shortCode,
-          totalClicks: 1,
+          totalClicks: 1, // ✅ Start with 1 for new document
           createdAt: serverTimestamp(),
           lastClickAt: serverTimestamp(),
           clickEvents: [clickEvent],
